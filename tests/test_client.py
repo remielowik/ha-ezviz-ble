@@ -21,7 +21,7 @@ from ezlock.protocol import (  # noqa: E402
     send_user_id_body,
 )
 
-DEVICE = BLEDevice("34:C6:DD:BD:65:00", "DL01_BD6231438", {})
+DEVICE = BLEDevice("AA:BB:CC:DD:EE:FF", "DL01_TEST00001", {})
 
 
 @pytest.fixture

@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "description": "Stand near the lock and wake it (touch the keypad) so it is advertising. Home Assistant bonds with the lock through the host's Bluetooth adapter, the same way the EZVIZ app does when you add the lock with the management code.",
+        "description": "Home Assistant bonds with the lock through the host's Bluetooth adapter, the same way a phone is added in the EZVIZ app. Close the EZVIZ app (or turn off your phone's Bluetooth) during setup: the lock accepts one Bluetooth connection at a time.",
         "data": {
           "address": "Lock",
           "management_code": "Management code",
@@ -21,13 +21,14 @@
       "user_not_registered": "The lock does not know this account.",
       "not_found": "The lock is no longer in Bluetooth range.",
       "pairing_not_possible": "The lock needs to be bonded, which only works through a local (BlueZ) Bluetooth adapter, not through a Bluetooth proxy.",
-      "pairing_failed": "Bonding with the lock failed. Wake the lock and try again.",
-      "cannot_connect": "Could not talk to the lock. Wake the lock and try again.",
-      "unknown": "Unexpected error, see the log."
+      "pairing_failed": "Bonding with the lock failed. Close the EZVIZ app or turn off your phone's Bluetooth and try again.",
+      "cannot_connect": "Could not talk to the lock. Close the EZVIZ app or turn off your phone's Bluetooth and try again.",
+      "unknown": "Unexpected error, see the log.",
+      "not_seen_locally": "The host's Bluetooth adapter has not seen the lock yet. Make sure the lock is in range of the Home Assistant host and try again in a minute."
     },
     "abort": {
       "already_configured": "This lock is already configured.",
-      "no_devices_found": "No connectable Bluetooth devices found. Wake the lock and try again."
+      "no_devices_found": "No connectable Bluetooth devices found. Make sure the lock is in Bluetooth range and try again."
     }
   },
   "options": {

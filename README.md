@@ -76,8 +76,9 @@ Or manually: copy `custom_components/ezviz_ble` into your Home Assistant
 
 Then:
 
-1. Wake the lock (touch the keypad) and go to *Settings → Devices & services →
-   Add integration → EZVIZ Bluetooth*.
+1. Close the EZVIZ app or turn off your phone's Bluetooth (the lock accepts
+   one Bluetooth connection at a time) and go to *Settings → Devices &
+   services → Add integration → EZVIZ Bluetooth*.
 2. Pick the lock (its Bluetooth name is its serial number) and enter the
    management code and account.
 
@@ -124,5 +125,5 @@ AppArmor profile blocks D-Bus calls to BlueZ.
 
 ```sh
 python3 -m unittest tests/test_protocol.py                          # stdlib only
-pytest -o asyncio_mode=auto tests/test_integration.py tests/test_client.py   # needs pytest-homeassistant-custom-component
+pytest -o asyncio_mode=auto tests/test_integration.py tests/test_client.py tests/test_bind.py   # needs pytest-homeassistant-custom-component
 ```

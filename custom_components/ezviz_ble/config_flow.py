@@ -27,6 +27,7 @@ from .const import (
 from .coordinator import EzvizBleConfigEntry
 from .ezlock.bind import (
     InvalidManagementCode,
+    LockNotSeenLocally,
     PairingFailed,
     PairingNotPossible,
     async_bind,
@@ -101,6 +102,9 @@ class EzvizBleConfigFlow(ConfigFlow, domain=DOMAIN):
             return {"base": "not_found"}
         try:
             await async_bind(ble_device, lock_user_id(account), code)
+        except LockNotSeenLocally as err:
+            _LOGGER.warning("Cannot bond with %s: %r", address, err)
+            return {"base": "not_seen_locally"}
         except PairingNotPossible as err:
             _LOGGER.warning("Cannot bond with %s: %r", address, err)
             return {"base": "pairing_not_possible"}

@@ -70,7 +70,7 @@ async def cmd_watch(args: argparse.Namespace) -> None:
 async def _find(address: str) -> BLEDevice:
     device = await BleakScanner.find_device_by_address(address, timeout=20)
     if device is None:
-        sys.exit(f"{address} not found; wake the lock (touch the keypad) and retry")
+        sys.exit(f"{address} not found; make sure the lock is in range and the phone app is closed")
     return device
 
 
