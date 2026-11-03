@@ -83,7 +83,20 @@ class EzvizBleCoordinator(DataUpdateCoordinator[EzvizBleData]):
         try:
             return await self._async_run(self._async_read)
         except _COMMUNICATION_ERRORS as err:
-            raise UpdateFailed(f"Could not read the lock state: {err}") from err
+            raise UpdateFailed(
+                f"Could not read the lock state: {err!r} "
+                f"(BlueZ: {await self._async_bluez_state()})"
+            ) from err
+
+    async def _async_bluez_state(self) -> str:
+        try:
+            from .ezlock import bluez  # noqa: PLC0415
+        except ImportError:
+            return "not available"
+        try:
+            return await bluez.async_describe_device(self.client.address)
+        except Exception as err:  # noqa: BLE001
+            return f"unknown ({err!r})"
 
     async def _async_read(self) -> EzvizBleData:
         state = await self.client.query_state()

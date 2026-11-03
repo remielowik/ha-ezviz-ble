@@ -256,3 +256,22 @@ class PairingAgent:
                         "lock disconnected during pairing",
                     )
                 await asyncio.sleep(_POLL_INTERVAL)
+
+
+async def async_describe_device(address: str) -> str:
+    """Return BlueZ's pairing state of a device, for diagnostics."""
+    bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+    try:
+        (objects,) = await _call(bus, "/", OBJECT_MANAGER_INTERFACE, "GetManagedObjects")
+    finally:
+        bus.disconnect()
+    for path, interfaces in objects.items():
+        device = interfaces.get(DEVICE_INTERFACE)
+        if device and device["Address"].value.upper() == address.upper():
+            states = ", ".join(
+                f"{key.lower()}={device[key].value}"
+                for key in ("Connected", "Paired", "Bonded", "Trusted", "Blocked")
+                if key in device
+            )
+            return f"{path}: {states}"
+    return "not known to BlueZ"
