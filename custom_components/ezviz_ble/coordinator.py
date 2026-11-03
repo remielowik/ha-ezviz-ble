@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import logging
@@ -18,7 +17,6 @@ from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
-    CONF_MANAGEMENT_CODE,
     CONF_POLL_INTERVAL,
     DEFAULT_POLL_INTERVAL,
     DOMAIN,
@@ -86,15 +84,20 @@ class EzvizBleCoordinator(DataUpdateCoordinator[EzvizBleData]):
         self.pending_action: LockAction | None = None
         self._operation_lock = asyncio.Lock()
         self._cancel_idle_disconnect: CALLBACK_TYPE | None = None
-        self._agent: AsyncExitStack | None = None
 
     async def _async_update_data(self) -> EzvizBleData:
         try:
             return await self._async_run(self._async_read)
         except _COMMUNICATION_ERRORS as err:
+            bluez_state = await self._async_bluez_state()
+            hint = (
+                "; if this keeps happening after setup, apply the one-time host"
+                " step from the README (Bluetooth key fix)"
+                if "bonded=True" in bluez_state
+                else ""
+            )
             raise UpdateFailed(
-                f"Could not read the lock state: {err!r} "
-                f"(BlueZ: {await self._async_bluez_state()})"
+                f"Could not read the lock state: {err!r} (BlueZ: {bluez_state}){hint}"
             ) from err
 
     async def _async_bluez_state(self) -> str:
@@ -147,13 +150,11 @@ class EzvizBleCoordinator(DataUpdateCoordinator[EzvizBleData]):
         await super().async_shutdown()
         self._async_cancel_idle_disconnect()
         await self.client.disconnect()
-        await self._async_release_agent()
 
     async def _async_run[_T](self, operation: Callable[[], Awaitable[_T]]) -> _T:
         async with self._operation_lock:
             self._async_cancel_idle_disconnect()
             try:
-                await self._async_hold_agent()
                 return await operation()
             finally:
                 self._cancel_idle_disconnect = async_call_later(
@@ -164,34 +165,6 @@ class EzvizBleCoordinator(DataUpdateCoordinator[EzvizBleData]):
         self._cancel_idle_disconnect = None
         async with self._operation_lock:
             await self.client.disconnect()
-            await self._async_release_agent()
-
-    async def _async_hold_agent(self) -> None:
-        """Answer the lock's passkey requests while we may be connected.
-
-        The lock asks for security on every connection, and BlueZ may have
-        no key it can use as central, in which case it pairs again.
-        """
-        if self._agent is not None or bluez is None:
-            return
-        stack = AsyncExitStack()
-        try:
-            await stack.enter_async_context(
-                bluez.agent_session(
-                    self.client.address,
-                    int(self.config_entry.data[CONF_MANAGEMENT_CODE]),
-                )
-            )
-        except Exception as err:  # noqa: BLE001
-            # No local BlueZ (e.g. only proxies): carry on without an agent.
-            _LOGGER.debug("Could not register the passkey agent: %r", err)
-            return
-        self._agent = stack
-
-    async def _async_release_agent(self) -> None:
-        stack, self._agent = self._agent, None
-        if stack is not None:
-            await stack.aclose()
 
     @callback
     def _async_cancel_idle_disconnect(self) -> None:

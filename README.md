@@ -91,6 +91,32 @@ a phone: it sends the account id, bonds using the management code as
 passkey and reads the state. The poll
 interval can be changed under the integration's *Configure* button.
 
+## One-time host step: Bluetooth key fix
+
+The lock pairs using the Bluetooth specification's *debug* key. Linux
+throws such keys away right after pairing and never loads them from disk,
+so after setup every reconnect fails (the host log shows
+`security requested but not available`). The key BlueZ saved is fine; it is
+just labeled as a debug key. Relabel it once, on the Home Assistant **host**
+(on Home Assistant OS: type `login` at the `ha >` console prompt):
+
+```sh
+ls /var/lib/bluetooth/                     # your adapter's address
+ls /var/lib/bluetooth/<adapter address>/   # the lock's address is one of these
+sed -i 's/^Authenticated=4$/Authenticated=3/' /var/lib/bluetooth/<adapter address>/<lock address>/info
+systemctl restart bluetooth
+```
+
+`Authenticated=4` means "debug key", `3` a regular Secure Connections key.
+After this the key survives restarts. Don't remove the lock with
+`bluetoothctl remove`: that deletes the key, and the lock refuses to pair
+again while it still remembers Home Assistant. If you ever set the lock up
+again, repeat this step.
+
+Security note: because of the debug key, someone who records the pairing
+over the air can derive the link key. Pair when nobody unfamiliar is close
+by.
+
 ## Trying it first with the CLI
 
 `tools/ezviz_ble_cli.py` uses the same library and talks to the host's BlueZ

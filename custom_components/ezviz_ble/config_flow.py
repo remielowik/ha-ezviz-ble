@@ -60,6 +60,7 @@ class EzvizBleConfigFlow(ConfigFlow, domain=DOMAIN):
             if not errors:
                 info = candidates.get(address)
                 return self.async_create_entry(
+                    description="default",
                     title=info.name if info else address,
                     data={
                         CONF_ADDRESS: address,

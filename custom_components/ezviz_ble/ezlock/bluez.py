@@ -5,10 +5,15 @@ management code. bleak cannot answer passkey requests, so this module
 registers its own org.bluez.Agent1.
 
 The agent is registered as the default agent because the lock starts
-pairing itself (SMP security request): right after it receives the user id,
-and again on reconnects when BlueZ has no key it can use as central. It only
-answers for the locks that hold an agent session and rejects every other
-device. Sessions are reference counted, so several locks share one agent.
+pairing itself (SMP security request) right after it receives the user id.
+It only answers for the locks that hold an agent session and rejects every
+other device. Sessions are reference counted, so several locks share one
+agent.
+
+The lock pairs with the Bluetooth specification's debug key pair. Linux
+drops such keys after pairing and never loads them from storage, so the
+stored key has to be marked as a regular Secure Connections key once (see
+the README) before Home Assistant can reconnect.
 """
 
 # No "from __future__ import annotations": dbus-fast reads the D-Bus

@@ -29,6 +29,9 @@
     "abort": {
       "already_configured": "This lock is already configured.",
       "no_devices_found": "No connectable Bluetooth devices found. Make sure the lock is in Bluetooth range and try again."
+    },
+    "create_entry": {
+      "default": "Paired with the lock. If Home Assistant can't reconnect to it after this (polls fail, the lock shows unavailable), apply the one-time Bluetooth key fix on the Home Assistant host described in the README."
     }
   },
   "options": {
