@@ -73,7 +73,13 @@ class _PasskeyAgent(ServiceInterface):
 
     @method()
     def RequestPasskey(self, device: "o") -> "u":  # noqa: N802, F821
-        _LOGGER.debug("RequestPasskey for %s", device)
+        masked = f"{self._passkey:06d}"
+        _LOGGER.debug(
+            "RequestPasskey for %s: answering %d digit code ending in %s",
+            device,
+            len(masked),
+            masked[-2:],
+        )
         return self._passkey
 
     @method()

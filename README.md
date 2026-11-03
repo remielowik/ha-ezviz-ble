@@ -56,7 +56,11 @@ is a short Bluetooth connection, which costs lock battery.
 
 * The lock must already be set up in the EZVIZ app with your account.
 * You need its **6 digit management code** and the **e-mail address** (or
-  phone number, if the account has none) of that EZVIZ account.
+  phone number, if the account has none) of that EZVIZ account. The
+  management code is the one you set in the EZVIZ app; only if it was never
+  changed is it the default from the battery cover label (0 followed by the
+  last five digits of the serial number). Repeated wrong codes may lock you
+  out for a while.
 * Home Assistant must reach the lock through a **local Bluetooth adapter
   (BlueZ)**. The lock only accepts commands over a bonded link, and bonding
   uses passkey entry, which ESPHome Bluetooth proxies can't do. If proxies are

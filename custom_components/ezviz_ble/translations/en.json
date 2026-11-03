@@ -10,18 +10,18 @@
         },
         "data_description": {
           "address": "The lock advertises its serial number as its Bluetooth name.",
-          "management_code": "The 6 digit management (admin) code of the lock.",
+          "management_code": "The lock's 6 digit management code: the one you set in the EZVIZ app, or, if it was never changed, the default on the battery cover label (0 followed by the last five digits of the serial number). Repeated wrong codes may lock you out for a while.",
           "account": "The e-mail address (or phone number, if the account has no e-mail) of the EZVIZ account that added the lock. The lock only accepts commands for users it knows."
         }
       }
     },
     "error": {
       "invalid_code_format": "The management code is 6 digits.",
-      "invalid_code": "The lock rejected the management code.",
+      "invalid_code": "The lock rejected the management code. If you changed it in the EZVIZ app, the default code from the battery cover no longer works.",
       "user_not_registered": "The lock does not know this account.",
       "not_found": "The lock is no longer in Bluetooth range.",
       "pairing_not_possible": "The lock needs to be bonded, which only works through a local (BlueZ) Bluetooth adapter, not through a Bluetooth proxy.",
-      "pairing_failed": "Bonding with the lock failed. Close the EZVIZ app or turn off your phone's Bluetooth and try again.",
+      "pairing_failed": "Bonding with the lock failed. If this happens right after the code is sent, the management code is probably wrong (see its description). Otherwise close the EZVIZ app or turn off your phone's Bluetooth and try again.",
       "cannot_connect": "Could not talk to the lock. Close the EZVIZ app or turn off your phone's Bluetooth and try again.",
       "unknown": "Unexpected error, see the log.",
       "not_seen_locally": "The host's Bluetooth adapter has not seen the lock yet. Make sure the lock is in range of the Home Assistant host and try again in a minute."
