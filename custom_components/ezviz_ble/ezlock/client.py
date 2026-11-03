@@ -154,18 +154,34 @@ class EzLockClient:
                 await self._client.write_gatt_char(char_uuid, frame, response=True)
                 async with asyncio.timeout(timeout):
                     return await future
+            except TimeoutError:
+                raise EzLockError(
+                    f"no response to {command[0]:02X}/{command[1]:02X} "
+                    f"within {timeout:g} s"
+                ) from None
             finally:
                 self._pending.pop(key, None)
 
+    async def write(
+        self, command: Command, body: bytes = b"", *, char_uuid: str = WRITE_CHAR_UUID
+    ) -> None:
+        """Send a frame the lock does not answer; done once the write is acked."""
+        await self.connect()
+        assert self._client is not None
+        frame = build_frame(command, body)
+        _LOGGER.debug("%s: write %s", self.address, frame.hex())
+        await self._client.write_gatt_char(char_uuid, frame, response=True)
+
     async def send_user_id(self) -> None:
-        """Announce the user id; needed right before bonding."""
-        frame = await self.request(
+        """Announce the user id right before bonding.
+
+        The lock sends no response frame; the acknowledged write is all.
+        """
+        await self.write(
             CMD_SEND_USER_ID,
             send_user_id_body(self._user_id),
             char_uuid=NOTIFY_CHAR_UUID,
         )
-        if frame.result != RESULT_OK:
-            raise EzLockResponseError(CMD_SEND_USER_ID, frame.result)
 
     async def query_state(self) -> LockState:
         """Read lock, door and battery state."""

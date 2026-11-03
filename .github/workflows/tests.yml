@@ -30,4 +30,4 @@ jobs:
       - name: Protocol tests
         run: python -m unittest tests/test_protocol.py
       - name: Home Assistant tests
-        run: python -m pytest -o asyncio_mode=auto tests/test_integration.py
+        run: python -m pytest -o asyncio_mode=auto tests/test_integration.py tests/test_client.py

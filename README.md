@@ -124,5 +124,5 @@ AppArmor profile blocks D-Bus calls to BlueZ.
 
 ```sh
 python3 -m unittest tests/test_protocol.py                          # stdlib only
-pytest -o asyncio_mode=auto tests/test_integration.py               # needs pytest-homeassistant-custom-component
+pytest -o asyncio_mode=auto tests/test_integration.py tests/test_client.py   # needs pytest-homeassistant-custom-component
 ```

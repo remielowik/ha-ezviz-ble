@@ -6,7 +6,7 @@ import logging
 
 from bleak.backends.device import BLEDevice
 
-from .client import EzLockClient, EzLockError, EzLockResponseError
+from .client import EzLockClient, EzLockError
 from .protocol import LockState
 
 _LOGGER = logging.getLogger(__name__)
@@ -36,11 +36,9 @@ async def async_bind(
     client = EzLockClient(ble_device, user_id)
     try:
         await client.connect()
-        try:
-            await client.send_user_id()
-        except EzLockResponseError as err:
-            # Usually fatal, but the bond may already exist: log and go on.
-            _LOGGER.warning("%s: lock rejected the user id: %s", client.address, err)
+        # An unbonded connection is dropped by the lock after about 7 s, so
+        # bond right after announcing the user id.
+        await client.send_user_id()
 
         # dbus-fast (and BlueZ) only exist on Linux.
         try:
@@ -49,16 +47,19 @@ async def async_bind(
             bluez = None
 
         device = await bluez.async_get_device(ble_device.address) if bluez else None
+        _LOGGER.debug("%s: BlueZ device state: %s", client.address, device)
         if device is not None and not device.paired:
             if not device.connected:
                 # Our connection runs through a proxy; BlueZ cannot bond it.
                 raise PairingNotPossible("lock is not connected through a local adapter")
+            _LOGGER.debug("%s: bonding with the management code", client.address)
             try:
                 await bluez.async_pair(ble_device.address, int(management_code))
             except bluez.BluezAuthenticationFailed as err:
                 raise InvalidManagementCode(str(err)) from err
-            except bluez.BluezError as err:
-                raise PairingFailed(str(err)) from err
+            except (bluez.BluezError, TimeoutError) as err:
+                raise PairingFailed(repr(err)) from err
+            _LOGGER.debug("%s: bonded", client.address)
 
         try:
             return await client.query_state()

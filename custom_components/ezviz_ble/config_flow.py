@@ -101,17 +101,19 @@ class EzvizBleConfigFlow(ConfigFlow, domain=DOMAIN):
             return {"base": "not_found"}
         try:
             await async_bind(ble_device, lock_user_id(account), code)
-        except PairingNotPossible:
+        except PairingNotPossible as err:
+            _LOGGER.warning("Cannot bond with %s: %r", address, err)
             return {"base": "pairing_not_possible"}
-        except InvalidManagementCode:
+        except InvalidManagementCode as err:
+            _LOGGER.warning("%s rejected the management code: %r", address, err)
             return {CONF_MANAGEMENT_CODE: "invalid_code"}
         except PairingFailed as err:
-            _LOGGER.debug("Bonding failed: %s", err)
+            _LOGGER.warning("Bonding with %s failed: %r", address, err)
             return {"base": "pairing_failed"}
         except EzLockUserNotRegistered:
             return {CONF_ACCOUNT: "user_not_registered"}
         except (EzLockError, BleakError, FrameError, TimeoutError) as err:
-            _LOGGER.debug("Binding failed: %s", err)
+            _LOGGER.warning("Binding to %s failed: %r", address, err)
             return {"base": "cannot_connect"}
         except Exception:
             _LOGGER.exception("Unexpected error while binding")
