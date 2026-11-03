@@ -46,6 +46,7 @@ _LOGGER = logging.getLogger(__name__)
 # moved.
 DEFAULT_TIMEOUT = 4.0
 CONTROL_TIMEOUT = 20.0
+CONNECT_ATTEMPTS = 2
 
 PushCallback = Callable[[Frame], None]
 
@@ -112,6 +113,9 @@ class EzLockClient:
                 self._ble_device,
                 self._ble_device.name or self._ble_device.address,
                 disconnected_callback=self._on_disconnected,
+                # Each attempt may make the lock ask for the passkey, and it
+                # locks out after repeated failures: don't retry much.
+                max_attempts=CONNECT_ATTEMPTS,
             )
             try:
                 await client.start_notify(NOTIFY_CHAR_UUID, self._on_notify)
