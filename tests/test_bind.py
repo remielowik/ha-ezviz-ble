@@ -65,7 +65,7 @@ def agent(calls):
 @pytest.fixture(autouse=True)
 def fakes(calls, agent):
     fake_bluez = SimpleNamespace(
-        PairingAgent=lambda passkey: agent,
+        agent_session=lambda address, passkey: agent,
         BluezError=BluezError,
         BluezAuthenticationFailed=BluezAuthenticationFailed,
     )

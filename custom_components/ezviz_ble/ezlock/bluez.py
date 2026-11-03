@@ -2,22 +2,27 @@
 
 The lock asks for passkey entry when bonding; the passkey is its 6 digit
 management code. bleak cannot answer passkey requests, so this module
-registers its own org.bluez.Agent1 while binding. It is registered as the
-default agent because the lock may start the pairing itself (SMP security
-request) right after it receives the user id, before Pair() is called.
+registers its own org.bluez.Agent1.
+
+The agent is registered as the default agent because the lock starts
+pairing itself (SMP security request): right after it receives the user id,
+and again on reconnects when BlueZ has no key it can use as central. It only
+answers for the locks that hold an agent session and rejects every other
+device. Sessions are reference counted, so several locks share one agent.
 """
 
 # No "from __future__ import annotations": dbus-fast reads the D-Bus
 # signatures from the annotations of the agent methods.
 
 import asyncio
+from collections.abc import AsyncIterator
 import contextlib
 from dataclasses import dataclass
 import logging
-from typing import Self
 
 from dbus_fast import BusType, Message, MessageType, Variant
 from dbus_fast.aio import MessageBus
+from dbus_fast.errors import DBusError
 from dbus_fast.service import ServiceInterface, method
 
 _LOGGER = logging.getLogger(__name__)
@@ -57,10 +62,22 @@ class BluezDevice:
     paired: bool
 
 
+def _address_from_path(path: str) -> str:
+    """Return AA:BB:CC:DD:EE:FF for /org/bluez/hciN/dev_AA_BB_CC_DD_EE_FF."""
+    return path.rsplit("/", 1)[-1].removeprefix("dev_").replace("_", ":").upper()
+
+
 class _PasskeyAgent(ServiceInterface):
-    def __init__(self, passkey: int) -> None:
+    def __init__(self, passkeys: dict[str, int]) -> None:
         super().__init__("org.bluez.Agent1")
-        self._passkey = passkey
+        self._passkeys = passkeys
+
+    def _passkey_for(self, device: str) -> int:
+        passkey = self._passkeys.get(_address_from_path(device))
+        if passkey is None:
+            _LOGGER.debug("Rejecting agent request for unrelated device %s", device)
+            raise DBusError("org.bluez.Error.Rejected", "not an EZVIZ lock in session")
+        return passkey
 
     @method()
     def Release(self):  # noqa: N802
@@ -68,23 +85,23 @@ class _PasskeyAgent(ServiceInterface):
 
     @method()
     def RequestPinCode(self, device: "o") -> "s":  # noqa: N802, F821
-        _LOGGER.debug("RequestPinCode for %s", device)
-        return f"{self._passkey:06d}"
+        return f"{self._passkey_for(device):06d}"
 
     @method()
     def RequestPasskey(self, device: "o") -> "u":  # noqa: N802, F821
-        masked = f"{self._passkey:06d}"
+        passkey = self._passkey_for(device)
+        masked = f"{passkey:06d}"
         _LOGGER.debug(
             "RequestPasskey for %s: answering %d digit code ending in %s",
             device,
             len(masked),
             masked[-2:],
         )
-        return self._passkey
+        return passkey
 
     @method()
     def DisplayPinCode(self, device: "o", pincode: "s"):  # noqa: N802, F821
-        _LOGGER.debug("DisplayPinCode for %s", device)
+        self._passkey_for(device)
 
     @method()
     def DisplayPasskey(self, device: "o", passkey: "u", entered: "q"):  # noqa: N802, F821
@@ -92,15 +109,17 @@ class _PasskeyAgent(ServiceInterface):
 
     @method()
     def RequestConfirmation(self, device: "o", passkey: "u"):  # noqa: N802, F821
+        self._passkey_for(device)
         _LOGGER.debug("RequestConfirmation for %s", device)
 
     @method()
     def RequestAuthorization(self, device: "o"):  # noqa: N802, F821
+        self._passkey_for(device)
         _LOGGER.debug("RequestAuthorization for %s", device)
 
     @method()
     def AuthorizeService(self, device: "o", uuid: "s"):  # noqa: N802, F821
-        _LOGGER.debug("AuthorizeService %s for %s", uuid, device)
+        self._passkey_for(device)
 
     @method()
     def Cancel(self):  # noqa: N802
@@ -137,68 +156,32 @@ async def _call(
     return reply.body
 
 
-class PairingAgent:
-    """Default BlueZ passkey agent for the duration of a bind.
+async def _find_device(bus: MessageBus, address: str) -> tuple[str, dict] | None:
+    (objects,) = await _call(bus, "/", OBJECT_MANAGER_INTERFACE, "GetManagedObjects")
+    for path, interfaces in objects.items():
+        device = interfaces.get(DEVICE_INTERFACE)
+        if device and device["Address"].value.upper() == address.upper():
+            return path, device
+    return None
 
-    Use as an async context manager around connecting, sending the user id
-    and bonding.
-    """
 
-    def __init__(self, passkey: int) -> None:
-        self._passkey = passkey
-        self._bus: MessageBus | None = None
+class AgentSession:
+    """Access to BlueZ while the shared passkey agent is registered."""
 
-    async def __aenter__(self) -> Self:
-        bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
-        try:
-            bus.export(AGENT_PATH, _PasskeyAgent(self._passkey))
-            await _call(
-                bus,
-                BLUEZ_ROOT,
-                AGENT_MANAGER_INTERFACE,
-                "RegisterAgent",
-                "os",
-                [AGENT_PATH, AGENT_CAPABILITY],
-            )
-            await _call(
-                bus,
-                BLUEZ_ROOT,
-                AGENT_MANAGER_INTERFACE,
-                "RequestDefaultAgent",
-                "o",
-                [AGENT_PATH],
-            )
-        except BaseException:
-            bus.disconnect()
-            raise
+    def __init__(self, bus: MessageBus) -> None:
         self._bus = bus
-        return self
-
-    async def __aexit__(self, *exc_info: object) -> None:
-        bus, self._bus = self._bus, None
-        if bus is None:
-            return
-        with contextlib.suppress(BluezError):
-            await _call(
-                bus, BLUEZ_ROOT, AGENT_MANAGER_INTERFACE, "UnregisterAgent", "o", [AGENT_PATH]
-            )
-        bus.disconnect()
 
     async def get_device(self, address: str) -> BluezDevice | None:
         """Return the BlueZ state of a device, or None if BlueZ doesn't know it."""
-        assert self._bus is not None
-        (objects,) = await _call(
-            self._bus, "/", OBJECT_MANAGER_INTERFACE, "GetManagedObjects"
+        found = await _find_device(self._bus, address)
+        if found is None:
+            return None
+        path, device = found
+        return BluezDevice(
+            path=path,
+            connected=device["Connected"].value,
+            paired=device["Paired"].value,
         )
-        for path, interfaces in objects.items():
-            device = interfaces.get(DEVICE_INTERFACE)
-            if device and device["Address"].value.upper() == address.upper():
-                return BluezDevice(
-                    path=path,
-                    connected=device["Connected"].value,
-                    paired=device["Paired"].value,
-                )
-        return None
 
     async def wait_for_device(self, address: str, timeout: float) -> BluezDevice | None:
         """Wait until a local adapter has seen the device advertise."""
@@ -212,7 +195,6 @@ class PairingAgent:
 
     async def pair(self, device: BluezDevice, timeout: float = PAIR_TIMEOUT) -> None:
         """Bond with a connected device and mark it trusted."""
-        assert self._bus is not None
         try:
             async with asyncio.timeout(timeout):
                 await _call(self._bus, device.path, DEVICE_INTERFACE, "Pair")
@@ -242,7 +224,6 @@ class PairingAgent:
         )
 
     async def _wait_paired(self, path: str, timeout: float) -> None:
-        assert self._bus is not None
         async with asyncio.timeout(timeout):
             while True:
                 (props,) = await _call(
@@ -258,20 +239,88 @@ class PairingAgent:
                 await asyncio.sleep(_POLL_INTERVAL)
 
 
+class _AgentRegistry:
+    """One default agent shared by all lock sessions."""
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self._bus: MessageBus | None = None
+        self._passkeys: dict[str, int] = {}
+        self._sessions: dict[str, int] = {}
+
+    async def acquire(self, address: str, passkey: int) -> MessageBus:
+        address = address.upper()
+        async with self._lock:
+            if self._bus is None:
+                self._bus = await self._register()
+            self._passkeys[address] = passkey
+            self._sessions[address] = self._sessions.get(address, 0) + 1
+            return self._bus
+
+    async def release(self, address: str) -> None:
+        address = address.upper()
+        async with self._lock:
+            self._sessions[address] -= 1
+            if not self._sessions[address]:
+                del self._sessions[address]
+                del self._passkeys[address]
+            if not self._sessions and self._bus is not None:
+                bus, self._bus = self._bus, None
+                with contextlib.suppress(BluezError):
+                    await _call(
+                        bus, BLUEZ_ROOT, AGENT_MANAGER_INTERFACE, "UnregisterAgent", "o", [AGENT_PATH]
+                    )
+                bus.disconnect()
+                _LOGGER.debug("Passkey agent unregistered")
+
+    async def _register(self) -> MessageBus:
+        bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+        try:
+            bus.export(AGENT_PATH, _PasskeyAgent(self._passkeys))
+            await _call(
+                bus,
+                BLUEZ_ROOT,
+                AGENT_MANAGER_INTERFACE,
+                "RegisterAgent",
+                "os",
+                [AGENT_PATH, AGENT_CAPABILITY],
+            )
+            await _call(
+                bus, BLUEZ_ROOT, AGENT_MANAGER_INTERFACE, "RequestDefaultAgent", "o", [AGENT_PATH]
+            )
+        except BaseException:
+            bus.disconnect()
+            raise
+        _LOGGER.debug("Passkey agent registered as default agent")
+        return bus
+
+
+_REGISTRY = _AgentRegistry()
+
+
+@contextlib.asynccontextmanager
+async def agent_session(address: str, passkey: int) -> AsyncIterator[AgentSession]:
+    """Answer passkey requests from this lock while the context is open."""
+    bus = await _REGISTRY.acquire(address, passkey)
+    try:
+        yield AgentSession(bus)
+    finally:
+        await _REGISTRY.release(address)
+
+
 async def async_describe_device(address: str) -> str:
     """Return BlueZ's pairing state of a device, for diagnostics."""
     bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
     try:
-        (objects,) = await _call(bus, "/", OBJECT_MANAGER_INTERFACE, "GetManagedObjects")
+        found = await _find_device(bus, address)
     finally:
         bus.disconnect()
-    for path, interfaces in objects.items():
-        device = interfaces.get(DEVICE_INTERFACE)
-        if device and device["Address"].value.upper() == address.upper():
-            states = ", ".join(
-                f"{key.lower()}={device[key].value}"
-                for key in ("Connected", "Paired", "Bonded", "Trusted", "Blocked")
-                if key in device
-            )
-            return f"{path}: {states}"
-    return "not known to BlueZ"
+    if found is None:
+        return "not known to BlueZ"
+    path, device = found
+    states = ", ".join(
+        f"{key.lower()}={device[key].value}"
+        for key in ("Connected", "Paired", "Bonded", "Trusted", "Blocked")
+        if key in device
+    )
+    return f"{path}: {states}"

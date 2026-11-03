@@ -85,6 +85,7 @@ def client_mocks():
         patch(f"{PACKAGE}.bluetooth.async_ble_device_from_address", return_value=BLE_DEVICE),
         patch(f"{PACKAGE}.bluetooth.async_register_callback", return_value=lambda: None),
         patch(f"{PACKAGE}.coordinator.STATE_SETTLE_SECONDS", 0),
+        patch(f"{PACKAGE}.coordinator.bluez", None),
         patch(f"{PACKAGE}.ezlock.client.EzLockClient.query_state", new_callable=AsyncMock) as query,
         patch(
             f"{PACKAGE}.ezlock.client.EzLockClient.query_battery",

@@ -70,7 +70,7 @@ async def _async_bond(client: EzLockClient, address: str, passkey: int) -> None:
     try:
         # Register the agent before sending the user id: the lock may start
         # pairing on its own as soon as it has received it.
-        async with bluez.PairingAgent(passkey) as agent:
+        async with bluez.agent_session(address, passkey) as agent:
             if await agent.wait_for_device(address, DEVICE_WAIT_SECONDS) is None:
                 raise LockNotSeenLocally(
                     f"no local Bluetooth adapter has seen {address} within "
