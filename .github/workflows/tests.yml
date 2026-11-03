@@ -1,0 +1,33 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install Home Assistant test harness
+        run: |
+          pip install -r requirements_test.txt
+          # The bluetooth integration's own requirements are not part of
+          # Home Assistant core; install the versions it pins.
+          python - <<'EOF' > bluetooth_requirements.txt
+          import json, pathlib, homeassistant.components as c
+          root = pathlib.Path(c.__path__[0])
+          reqs = set()
+          for name in ("bluetooth", "bluetooth_adapters", "usb"):
+              reqs.update(json.loads((root / name / "manifest.json").read_text()).get("requirements", []))
+          print("\n".join(sorted(reqs)))
+          EOF
+          pip install -r bluetooth_requirements.txt
+      - name: Protocol tests
+        run: python -m unittest tests/test_protocol.py
+      - name: Home Assistant tests
+        run: python -m pytest -o asyncio_mode=auto tests/test_integration.py

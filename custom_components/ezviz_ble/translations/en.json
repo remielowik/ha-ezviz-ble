@@ -1,0 +1,63 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "description": "Stand near the lock and wake it (touch the keypad) so it is advertising. Home Assistant bonds with the lock through the host's Bluetooth adapter, the same way the EZVIZ app does when you add the lock with the management code.",
+        "data": {
+          "address": "Lock",
+          "management_code": "Management code",
+          "account": "EZVIZ account"
+        },
+        "data_description": {
+          "address": "The lock advertises its serial number as its Bluetooth name.",
+          "management_code": "The 6 digit management (admin) code of the lock.",
+          "account": "The e-mail address (or phone number, if the account has no e-mail) of the EZVIZ account that added the lock. The lock only accepts commands for users it knows."
+        }
+      }
+    },
+    "error": {
+      "invalid_code_format": "The management code is 6 digits.",
+      "invalid_code": "The lock rejected the management code.",
+      "user_not_registered": "The lock does not know this account.",
+      "not_found": "The lock is no longer in Bluetooth range.",
+      "pairing_not_possible": "The lock needs to be bonded, which only works through a local (BlueZ) Bluetooth adapter, not through a Bluetooth proxy.",
+      "pairing_failed": "Bonding with the lock failed. Wake the lock and try again.",
+      "cannot_connect": "Could not talk to the lock. Wake the lock and try again.",
+      "unknown": "Unexpected error, see the log."
+    },
+    "abort": {
+      "already_configured": "This lock is already configured.",
+      "no_devices_found": "No connectable Bluetooth devices found. Wake the lock and try again."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "poll_interval": "Poll interval (minutes)"
+        },
+        "data_description": {
+          "poll_interval": "How often to read the lock state. Each read is a Bluetooth connection, which uses lock battery."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "keypad_battery": {
+        "name": "Keypad battery"
+      },
+      "door_contact_battery": {
+        "name": "Door contact battery"
+      }
+    }
+  },
+  "exceptions": {
+    "user_not_registered": {
+      "message": "The lock does not know the configured EZVIZ account."
+    },
+    "command_failed": {
+      "message": "The lock did not execute the command: {error}"
+    }
+  }
+}
