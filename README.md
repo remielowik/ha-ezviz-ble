@@ -106,8 +106,9 @@ data:
   phone number, if the account has none) of that EZVIZ account. The
   management code is the one you set in the EZVIZ app; only if it was never
   changed is it the default from the battery cover label (0 followed by the
-  last five digits of the serial number). Repeated wrong codes may lock you
-  out for a while.
+  last five digits of the serial number). The lock doesn't limit wrong
+  codes, and the default follows from the serial number in its Bluetooth
+  name, so change it in the EZVIZ app if you still have the default.
 * Home Assistant must reach the lock through a **local Bluetooth adapter
   (BlueZ)**. The lock only accepts commands over a link bonded with the
   management code as passkey, which ESPHome Bluetooth proxies can't do. Without

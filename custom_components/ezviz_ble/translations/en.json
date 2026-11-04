@@ -10,7 +10,7 @@
         },
         "data_description": {
           "address": "The lock advertises its serial number as its Bluetooth name.",
-          "management_code": "The lock's 6 digit management code: the one you set in the EZVIZ app, or, if it was never changed, the default on the battery cover label (0 followed by the last five digits of the serial number). Repeated wrong codes may lock you out for a while.",
+          "management_code": "The lock's 6 digit management code: the one you set in the EZVIZ app, or, if it was never changed, the default on the battery cover label (0 followed by the last five digits of the serial number).",
           "account": "The e-mail address (or phone number, if the account has no e-mail) of the EZVIZ account that added the lock. The lock only accepts commands for users it knows."
         }
       }
