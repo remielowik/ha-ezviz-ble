@@ -70,14 +70,14 @@ def fakes(calls, agent):
         BluezAuthenticationFailed=BluezAuthenticationFailed,
     )
 
-    async def send_user_id(self):
+    async def connect(self):
+        # The real connect announces the user id.
         calls.append("send user id")
 
     with (
         patch.object(bind, "bluez", fake_bluez),
-        patch("ezlock.bind.EzLockClient.connect", AsyncMock()),
+        patch("ezlock.bind.EzLockClient.connect", connect),
         patch("ezlock.bind.EzLockClient.disconnect", AsyncMock()),
-        patch("ezlock.bind.EzLockClient.send_user_id", send_user_id),
         patch("ezlock.bind.EzLockClient.query_state", AsyncMock(return_value="state")),
     ):
         yield

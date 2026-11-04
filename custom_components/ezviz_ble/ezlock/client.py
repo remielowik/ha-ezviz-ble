@@ -104,7 +104,11 @@ class EzLockClient:
         self._ble_device = ble_device
 
     async def connect(self) -> None:
-        """Connect and subscribe to notifications, if not connected yet."""
+        """Connect, subscribe to notifications and announce the user id.
+
+        The lock only answers requests on a connection that started with
+        the user id (SendUserId), so every connection sends it first.
+        """
         async with self._connect_lock:
             if self.is_connected:
                 return
@@ -119,6 +123,10 @@ class EzLockClient:
             )
             try:
                 await client.start_notify(NOTIFY_CHAR_UUID, self._on_notify)
+                # No response frame follows; the acknowledged write is all.
+                frame = build_frame(CMD_SEND_USER_ID, send_user_id_body(self._user_id))
+                _LOGGER.debug("%s: write %s", self.address, frame.hex())
+                await client.write_gatt_char(NOTIFY_CHAR_UUID, frame, response=True)
             except BaseException:
                 await client.disconnect()
                 raise
@@ -175,17 +183,6 @@ class EzLockClient:
         frame = build_frame(command, body)
         _LOGGER.debug("%s: write %s", self.address, frame.hex())
         await self._client.write_gatt_char(char_uuid, frame, response=True)
-
-    async def send_user_id(self) -> None:
-        """Announce the user id right before bonding.
-
-        The lock sends no response frame; the acknowledged write is all.
-        """
-        await self.write(
-            CMD_SEND_USER_ID,
-            send_user_id_body(self._user_id),
-            char_uuid=NOTIFY_CHAR_UUID,
-        )
 
     async def query_state(self) -> LockState:
         """Read lock, door and battery state."""

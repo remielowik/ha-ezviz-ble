@@ -6,7 +6,7 @@ Run with pytest (needs bleak and bleak-retry-connector):
 
 from pathlib import Path
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from bleak.backends.device import BLEDevice
 import pytest
@@ -36,23 +36,46 @@ def bleak_client():
         yield client
 
 
-async def test_send_user_id_does_not_wait_for_a_response(bleak_client) -> None:
+USER_ID_WRITE = call(
+    NOTIFY_CHAR_UUID,
+    build_frame((0x01, 0xF9), send_user_id_body("me@example.com")),
+    response=True,
+)
+
+
+async def test_connect_announces_user_id_without_waiting_for_a_response(bleak_client) -> None:
     lock = EzLockClient(DEVICE, "me@example.com")
-    await lock.send_user_id()
-    bleak_client.write_gatt_char.assert_awaited_once_with(
-        NOTIFY_CHAR_UUID,
-        build_frame((0x01, 0xF9), send_user_id_body("me@example.com")),
-        response=True,
-    )
+    await lock.connect()
+    assert bleak_client.write_gatt_char.await_args_list == [USER_ID_WRITE]
+
+
+async def test_user_id_is_sent_once_per_connection(bleak_client) -> None:
+    lock = EzLockClient(DEVICE, "me@example.com")
+    with pytest.raises(EzLockError):
+        await lock.request((0x81, 0x01), timeout=0.01)
+    with pytest.raises(EzLockError):
+        await lock.request((0x81, 0x11), timeout=0.01)
+    assert bleak_client.write_gatt_char.await_args_list[0] == USER_ID_WRITE
+    assert bleak_client.write_gatt_char.await_args_list.count(USER_ID_WRITE) == 1
 
 
 async def test_missing_response_raises_clear_error(bleak_client) -> None:
     lock = EzLockClient(DEVICE, "me@example.com")
     with pytest.raises(EzLockError, match="no response to 81/01 within 0.01 s"):
         await lock.request((0x81, 0x01), timeout=0.01)
-    bleak_client.write_gatt_char.assert_awaited_once_with(
-        WRITE_CHAR_UUID, build_frame((0x81, 0x01)), response=True
-    )
+    assert bleak_client.write_gatt_char.await_args_list == [
+        USER_ID_WRITE,
+        call(WRITE_CHAR_UUID, build_frame((0x81, 0x01)), response=True),
+    ]
+
+
+async def test_failed_user_id_write_closes_the_connection(bleak_client) -> None:
+    bleak_client.write_gatt_char.side_effect = OSError("write failed")
+    lock = EzLockClient(DEVICE, "me@example.com")
+    with pytest.raises(OSError):
+        await lock.connect()
+    bleak_client.disconnect.assert_awaited_once()
+    assert not lock.is_connected
 
 
 async def test_push_does_not_answer_a_request(bleak_client) -> None:
