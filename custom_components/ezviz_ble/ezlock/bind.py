@@ -20,8 +20,8 @@ _LOGGER = logging.getLogger(__name__)
 
 # The lock advertises slowly; give a local adapter time to see it.
 DEVICE_WAIT_SECONDS = 30.0
-# Right after bonding the lock may not answer at once.
-BOND_SETTLE_SECONDS = 1.0
+# Bonding starts another GATT exchange in BlueZ; let it finish first.
+BOND_SETTLE_SECONDS = 2.0
 STATE_ATTEMPTS_AFTER_BOND = 2
 
 

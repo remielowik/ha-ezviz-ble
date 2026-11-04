@@ -10,6 +10,7 @@ import sys
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from bleak.backends.device import BLEDevice
+from bleak.exc import BleakError
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "custom_components" / "ezviz_ble"))
@@ -62,6 +63,8 @@ def bleak_client():
     with (
         patch("ezlock.client.establish_connection", AsyncMock(return_value=client)),
         patch.object(client_module, "USER_ID_REPLY_TIMEOUT", 0.01),
+        patch.object(client_module, "GATT_SETTLE_SECONDS", 0),
+        patch.object(client_module, "SETUP_RETRY_DELAY_SECONDS", 0),
     ):
         yield client
 
@@ -77,6 +80,42 @@ async def test_connect_announces_user_id(bleak_client) -> None:
     lock = EzLockClient(DEVICE, "me@example.com")
     await lock.connect()
     assert bleak_client.write_gatt_char.await_args_list == [USER_ID_WRITE]
+
+
+async def test_connect_lets_bluez_finish_before_the_first_write(bleak_client) -> None:
+    order = []
+    real_sleep = client_module.asyncio.sleep
+
+    async def sleep(seconds):
+        order.append(f"sleep {seconds}")
+        await real_sleep(0)
+
+    bleak_client.start_notify.side_effect = lambda *args: order.append("start_notify")
+    lock = EzLockClient(DEVICE, "me@example.com")
+    with (
+        patch.object(client_module, "GATT_SETTLE_SECONDS", 2.0),
+        patch.object(client_module.asyncio, "sleep", sleep),
+    ):
+        await lock.connect()
+    assert order[:2] == ["sleep 2.0", "start_notify"]
+
+
+async def test_link_lost_during_setup_is_retried_once(bleak_client) -> None:
+    bleak_client.start_notify.side_effect = [BleakError("link lost"), None]
+    lock = EzLockClient(DEVICE, "me@example.com")
+    await lock.connect()
+    assert client_module.establish_connection.await_count == 2
+    bleak_client.disconnect.assert_awaited_once()
+    assert lock.is_connected
+
+
+async def test_second_setup_failure_is_raised(bleak_client) -> None:
+    bleak_client.start_notify.side_effect = BleakError("link lost")
+    lock = EzLockClient(DEVICE, "me@example.com")
+    with pytest.raises(BleakError):
+        await lock.connect()
+    assert client_module.establish_connection.await_count == 2
+    assert not lock.is_connected
 
 
 async def test_user_id_is_repeated_until_confirmed(bleak_client) -> None:
@@ -114,6 +153,8 @@ async def test_unknown_user_id_is_reported(bleak_client) -> None:
     lock = EzLockClient(DEVICE, "me@example.com")
     with pytest.raises(EzLockUserNotRegistered):
         await lock.connect()
+    # An unknown user id is an answer, not a lost link: no retry.
+    assert client_module.establish_connection.await_count == 1
     bleak_client.disconnect.assert_awaited_once()
     assert not lock.is_connected
 
@@ -143,7 +184,8 @@ async def test_failed_user_id_write_closes_the_connection(bleak_client) -> None:
     lock = EzLockClient(DEVICE, "me@example.com")
     with pytest.raises(OSError):
         await lock.connect()
-    bleak_client.disconnect.assert_awaited_once()
+    # Tried twice (one setup retry), and each connection was closed.
+    assert bleak_client.disconnect.await_count == 2
     assert not lock.is_connected
 
 
