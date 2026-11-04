@@ -80,7 +80,10 @@ def _print_push(frame: Frame) -> None:
 
 async def cmd_bind(args: argparse.Namespace) -> None:
     state = await async_bind(await _find(args.address), lock_user_id(args.account), args.code)
-    print(f"bound, state: {state}")
+    if state is None:
+        print("bound; the lock did not report its state yet, try `state`")
+    else:
+        print(f"bound, state: {state}")
 
 
 async def _with_client(args: argparse.Namespace, operation) -> None:

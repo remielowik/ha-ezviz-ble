@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from bleak.backends.device import BLEDevice
 
-from .client import EzLockClient, EzLockError
-from .protocol import LockState
+from .client import EzLockClient, EzLockError, EzLockUserNotRegistered
+from .protocol import CMD_SEND_USER_ID, NOTIFY_CHAR_UUID, LockState, send_user_id_body
 
 # dbus-fast (and BlueZ) only exist on Linux.
 try:
@@ -19,6 +20,9 @@ _LOGGER = logging.getLogger(__name__)
 
 # The lock advertises slowly; give a local adapter time to see it.
 DEVICE_WAIT_SECONDS = 30.0
+# Right after bonding the lock may not answer at once.
+BOND_SETTLE_SECONDS = 1.0
+STATE_ATTEMPTS_AFTER_BOND = 2
 
 
 class PairingNotPossible(EzLockError):
@@ -39,20 +43,26 @@ class InvalidManagementCode(PairingFailed):
 
 async def async_bind(
     ble_device: BLEDevice, user_id: str, management_code: str
-) -> LockState:
+) -> LockState | None:
     """Announce the user id, bond with the management code and read the state.
 
     Connect, enable notifications, send the user id and bond using the
     management code as passkey. Commands are only accepted over a bonded
-    link for a known user id. The lock drops an unbonded connection after
-    about 7 s, so all of this has to happen in one go.
+    link for a known user id, and the lock may drop an unbonded connection
+    within seconds, so all of this has to happen in one go.
+
+    Returns None if a new bond was made but the lock did not report its
+    state: the bond already proves the user id and the management code.
     """
     client = EzLockClient(ble_device, user_id)
     try:
         if bluez is None:
             await client.connect()  # also sends the user id
+            bonded_now = False
         else:
-            await _async_bond(client, ble_device.address, int(management_code))
+            bonded_now = await _async_bond(client, ble_device.address, int(management_code))
+        if bonded_now:
+            return await _async_state_after_bond(client, user_id)
         try:
             return await client.query_state()
         except (EzLockError, TimeoutError) as err:
@@ -65,7 +75,30 @@ async def async_bind(
         await client.disconnect()
 
 
-async def _async_bond(client: EzLockClient, address: str, passkey: int) -> None:
+async def _async_state_after_bond(client: EzLockClient, user_id: str) -> LockState | None:
+    await asyncio.sleep(BOND_SETTLE_SECONDS)
+    # Announce the user id again, now over the encrypted link.
+    await client.write(
+        CMD_SEND_USER_ID, send_user_id_body(user_id), char_uuid=NOTIFY_CHAR_UUID
+    )
+    for attempt in range(1, STATE_ATTEMPTS_AFTER_BOND + 1):
+        try:
+            return await client.query_state()
+        except EzLockUserNotRegistered:
+            raise
+        except (EzLockError, TimeoutError) as err:
+            _LOGGER.debug(
+                "%s: no state after bonding (attempt %d): %s", client.address, attempt, err
+            )
+    _LOGGER.warning(
+        "%s: bonded, but the lock did not report its state yet; it is read on the next poll",
+        client.address,
+    )
+    return None
+
+
+async def _async_bond(client: EzLockClient, address: str, passkey: int) -> bool:
+    """Bond unless BlueZ already is; return whether a new bond was made."""
     try:
         # Register the agent before sending the user id: the lock may start
         # pairing on its own as soon as it has received it.
@@ -84,7 +117,7 @@ async def _async_bond(client: EzLockClient, address: str, passkey: int) -> None:
             if device is None or not device.connected:
                 raise PairingNotPossible("lock is not connected through a local adapter")
             if device.paired:
-                return
+                return False
             _LOGGER.debug("%s: bonding with the management code", address)
             try:
                 await agent.pair(device)
@@ -93,6 +126,7 @@ async def _async_bond(client: EzLockClient, address: str, passkey: int) -> None:
             except (bluez.BluezError, TimeoutError) as err:
                 raise PairingFailed(repr(err)) from err
             _LOGGER.debug("%s: bonded", address)
+            return True
     except bluez.BluezError as err:
         # Registering the agent or looking up the device failed.
         raise PairingNotPossible(f"BlueZ is not usable: {err!r}") from err
