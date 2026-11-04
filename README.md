@@ -106,13 +106,16 @@ data:
   phone number, if the account has none) of that EZVIZ account. The
   management code is the one you set in the EZVIZ app; only if it was never
   changed is it the default from the battery cover label (0 followed by the
-  last five digits of the serial number). Repeated wrong codes may lock you
-  out for a while.
+  last five digits of the serial number). The lock doesn't limit wrong
+  codes, and the default follows from the serial number in its Bluetooth
+  name, so change it in the EZVIZ app if you still have the default.
 * Home Assistant must reach the lock through a **local Bluetooth adapter
-  (BlueZ)**. The lock only accepts commands over a bonded link, and bonding
-  uses passkey entry, which ESPHome Bluetooth proxies can't do. If proxies are
-  closer to the lock than the host adapter, Home Assistant may route the
-  connection through them and the lock will refuse it.
+  (BlueZ)**. The lock only accepts commands over a link bonded with the
+  management code as passkey, which ESPHome Bluetooth proxies can't do. Without
+  it the lock ignores commands, and it refuses pairing without a passkey
+  ("Just Works"). If proxies are closer to the lock than the host adapter,
+  Home Assistant may route the connection through them and the lock will
+  refuse it.
 
 ## Install
 
@@ -156,9 +159,9 @@ systemctl restart bluetooth
 
 `Authenticated=4` means "debug key", `3` a regular Secure Connections key.
 After this the key survives restarts. Don't remove the lock with
-`bluetoothctl remove`: that deletes the key, and the lock refuses to pair
-again while it still remembers Home Assistant. If you ever set the lock up
-again, repeat this step.
+`bluetoothctl remove`: that deletes the key, and Home Assistant can't reach
+the lock until it is set up again. Pairing again with the management code
+works. Whenever the lock is set up again, repeat this step.
 
 Security note: because of the debug key, someone who records the pairing
 over the air can derive the link key. Pair when nobody unfamiliar is close
@@ -188,8 +191,6 @@ AppArmor profile blocks D-Bus calls to BlueZ.
 
 ## Not verified yet
 
-* Whether the lock really refuses commands without bonding. If it doesn't,
-  ESPHome proxies would work too.
 * Whether bonding Home Assistant affects the phones already bonded with the
   lock. The lock supports several users, so it shouldn't.
 * What result code 6 of lock/unlock means. It is treated as success.

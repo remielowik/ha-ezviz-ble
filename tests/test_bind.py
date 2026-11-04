@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "custom_components"
 
 from ezlock import bind  # noqa: E402
 from ezlock.bluez import BluezAuthenticationFailed, BluezDevice, BluezError  # noqa: E402
+from ezlock.client import EzLockError, EzLockUserNotRegistered  # noqa: E402
 
 ADDRESS = "AA:BB:CC:DD:EE:FF"
 DEVICE = BLEDevice(ADDRESS, "DL01_TEST00001", {})
@@ -62,8 +63,13 @@ def agent(calls):
     return FakeAgent(calls)
 
 
+@pytest.fixture
+def query():
+    return AsyncMock(return_value="state")
+
+
 @pytest.fixture(autouse=True)
-def fakes(calls, agent):
+def fakes(calls, agent, query):
     fake_bluez = SimpleNamespace(
         agent_session=lambda address, passkey: agent,
         BluezError=BluezError,
@@ -74,18 +80,29 @@ def fakes(calls, agent):
         # The real connect announces the user id.
         calls.append("send user id")
 
+    async def send_user_id(self):
+        calls.append("send user id again")
+
     with (
         patch.object(bind, "bluez", fake_bluez),
         patch("ezlock.bind.EzLockClient.connect", connect),
         patch("ezlock.bind.EzLockClient.disconnect", AsyncMock()),
-        patch("ezlock.bind.EzLockClient.query_state", AsyncMock(return_value="state")),
+        patch("ezlock.bind.EzLockClient.send_user_id", send_user_id),
+        patch("ezlock.bind.EzLockClient.query_state", query),
+        patch.object(bind, "BOND_SETTLE_SECONDS", 0),
     ):
         yield
 
 
 async def test_agent_is_registered_before_the_user_id_is_sent(calls) -> None:
     assert await bind.async_bind(DEVICE, ACCOUNT, CODE) == "state"
-    assert calls == ["agent registered", "send user id", "pair", "agent unregistered"]
+    assert calls == [
+        "agent registered",
+        "send user id",
+        "pair",
+        "agent unregistered",
+        "send user id again",  # now over the encrypted link
+    ]
 
 
 async def test_not_seen_by_a_local_adapter(agent, calls) -> None:
@@ -111,3 +128,29 @@ async def test_already_bonded_skips_pairing(agent, calls) -> None:
     agent.paired = True
     await bind.async_bind(DEVICE, ACCOUNT, CODE)
     assert "pair" not in calls
+
+
+async def test_slow_first_answer_after_bonding(query) -> None:
+    query.side_effect = [EzLockError("no response"), "state"]
+    assert await bind.async_bind(DEVICE, ACCOUNT, CODE) == "state"
+
+
+async def test_bonded_without_state_still_binds(query) -> None:
+    # The bond proves the account and the code; the state is read later.
+    query.side_effect = EzLockError("no response")
+    assert await bind.async_bind(DEVICE, ACCOUNT, CODE) is None
+    assert query.await_count == bind.STATE_ATTEMPTS_AFTER_BOND
+
+
+async def test_unregistered_user_after_bonding_is_an_error(query) -> None:
+    query.side_effect = EzLockUserNotRegistered((0x81, 0x01), 1)
+    with pytest.raises(EzLockUserNotRegistered):
+        await bind.async_bind(DEVICE, ACCOUNT, CODE)
+
+
+async def test_existing_bond_without_state_is_an_error(agent, query, calls) -> None:
+    agent.paired = True
+    query.side_effect = EzLockError("no response")
+    with pytest.raises(EzLockError):
+        await bind.async_bind(DEVICE, ACCOUNT, CODE)
+    assert "send user id again" not in calls
