@@ -109,10 +109,12 @@ data:
   last five digits of the serial number). Repeated wrong codes may lock you
   out for a while.
 * Home Assistant must reach the lock through a **local Bluetooth adapter
-  (BlueZ)**. The lock only accepts commands over a bonded link, and bonding
-  uses passkey entry, which ESPHome Bluetooth proxies can't do. If proxies are
-  closer to the lock than the host adapter, Home Assistant may route the
-  connection through them and the lock will refuse it.
+  (BlueZ)**. The lock only accepts commands over a link bonded with the
+  management code as passkey, which ESPHome Bluetooth proxies can't do. Without
+  it the lock ignores commands, and it refuses pairing without a passkey
+  ("Just Works"). If proxies are closer to the lock than the host adapter,
+  Home Assistant may route the connection through them and the lock will
+  refuse it.
 
 ## Install
 
@@ -188,8 +190,6 @@ AppArmor profile blocks D-Bus calls to BlueZ.
 
 ## Not verified yet
 
-* Whether the lock really refuses commands without bonding. If it doesn't,
-  ESPHome proxies would work too.
 * Whether bonding Home Assistant affects the phones already bonded with the
   lock. The lock supports several users, so it shouldn't.
 * What result code 6 of lock/unlock means. It is treated as success.
