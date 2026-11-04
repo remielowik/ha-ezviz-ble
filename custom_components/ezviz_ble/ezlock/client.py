@@ -70,6 +70,13 @@ _LOGGER = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 4.0
 CONTROL_TIMEOUT = 20.0
 CONNECT_ATTEMPTS = 2
+# The lock confirms the user id within a fraction of a second. After a quick
+# reconnect it sometimes ignores the first one, and then answers nothing on
+# that connection until the user id is sent again.
+USER_ID_REPLY_TIMEOUT = 1.0
+USER_ID_ATTEMPTS = 3
+# Result of the user id confirmation for an id the lock doesn't know.
+USER_ID_UNKNOWN = 1
 
 PushCallback = Callable[[Frame], None]
 
@@ -178,15 +185,47 @@ class EzLockClient:
             )
             try:
                 await client.start_notify(NOTIFY_CHAR_UUID, self._on_notify)
-                # No response frame follows; the acknowledged write is all.
-                frame = build_frame(CMD_SEND_USER_ID, send_user_id_body(self._user_id))
-                _LOGGER.debug("%s: write %s", self.address, frame.hex())
-                await client.write_gatt_char(NOTIFY_CHAR_UUID, frame, response=True)
+                await self._announce_user_id(client)
             except BaseException:
                 await client.disconnect()
                 raise
             self._client = client
             _LOGGER.debug("%s: connected", self.address)
+
+    async def send_user_id(self) -> None:
+        """Announce the user id again on the current connection."""
+        await self.connect()
+        assert self._client is not None
+        async with self._request_lock:
+            await self._announce_user_id(self._client)
+
+    async def _announce_user_id(self, client: BleakClient) -> None:
+        """Send the user id until the lock confirms it.
+
+        A missing confirmation is not an error: the requests that follow
+        show whether the lock listens.
+        """
+        frame = build_frame(CMD_SEND_USER_ID, send_user_id_body(self._user_id))
+        key = response_command(CMD_SEND_USER_ID)
+        for attempt in range(1, USER_ID_ATTEMPTS + 1):
+            future: asyncio.Future[Frame] = asyncio.get_running_loop().create_future()
+            self._pending[key] = future
+            try:
+                _LOGGER.debug("%s: write %s", self.address, frame.hex())
+                await client.write_gatt_char(NOTIFY_CHAR_UUID, frame, response=True)
+                async with asyncio.timeout(USER_ID_REPLY_TIMEOUT):
+                    reply = await future
+            except TimeoutError:
+                _LOGGER.debug(
+                    "%s: user id not confirmed (attempt %d)", self.address, attempt
+                )
+                continue
+            finally:
+                self._pending.pop(key, None)
+            if reply.result == USER_ID_UNKNOWN:
+                raise EzLockUserNotRegistered(CMD_SEND_USER_ID, reply.result)
+            return
+        _LOGGER.debug("%s: the lock did not confirm the user id", self.address)
 
     async def disconnect(self) -> None:
         """Close the connection."""

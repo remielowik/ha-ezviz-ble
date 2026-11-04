@@ -80,14 +80,14 @@ def fakes(calls, agent, query):
         # The real connect announces the user id.
         calls.append("send user id")
 
-    async def write(self, command, body=b"", *, char_uuid=None):
-        calls.append(f"write {command[0]:02x}/{command[1]:02x}")
+    async def send_user_id(self):
+        calls.append("send user id again")
 
     with (
         patch.object(bind, "bluez", fake_bluez),
         patch("ezlock.bind.EzLockClient.connect", connect),
         patch("ezlock.bind.EzLockClient.disconnect", AsyncMock()),
-        patch("ezlock.bind.EzLockClient.write", write),
+        patch("ezlock.bind.EzLockClient.send_user_id", send_user_id),
         patch("ezlock.bind.EzLockClient.query_state", query),
         patch.object(bind, "BOND_SETTLE_SECONDS", 0),
     ):
@@ -101,7 +101,7 @@ async def test_agent_is_registered_before_the_user_id_is_sent(calls) -> None:
         "send user id",
         "pair",
         "agent unregistered",
-        "write 01/f9",  # the user id again, over the encrypted link
+        "send user id again",  # now over the encrypted link
     ]
 
 
@@ -153,4 +153,4 @@ async def test_existing_bond_without_state_is_an_error(agent, query, calls) -> N
     query.side_effect = EzLockError("no response")
     with pytest.raises(EzLockError):
         await bind.async_bind(DEVICE, ACCOUNT, CODE)
-    assert "write 01/f9" not in calls
+    assert "send user id again" not in calls

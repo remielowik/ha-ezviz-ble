@@ -14,7 +14,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "custom_components" / "ezviz_ble"))
 
-from ezlock.client import EzLockClient, EzLockError, EzLockPinExists  # noqa: E402
+from ezlock import client as client_module  # noqa: E402
+from ezlock.client import (  # noqa: E402
+    EzLockClient,
+    EzLockError,
+    EzLockPinExists,
+    EzLockUserNotRegistered,
+)
 from ezlock.protocol import (  # noqa: E402
     CMD_PIN,
     CMD_QUERY_KEY,
@@ -30,15 +36,33 @@ from ezlock.protocol import (  # noqa: E402
 DEVICE = BLEDevice("AA:BB:CC:DD:EE:FF", "DL01_TEST00001", {})
 
 
+def _confirm_user_id(bleak_client, uuid, result: int = 0) -> None:
+    """Answer a user id write the way the lock does."""
+    if uuid == NOTIFY_CHAR_UUID:
+        on_notify = bleak_client.start_notify.await_args.args[1]
+        on_notify(None, _reply((0x01, 0xF9), result))
+
+
 @pytest.fixture
 def bleak_client():
-    """A connected fake BleakClient returned by establish_connection."""
+    """A connected fake BleakClient returned by establish_connection.
+
+    The fake lock confirms the user id; tests that need more replace
+    write_gatt_char's side effect.
+    """
     client = MagicMock()
     client.is_connected = True
     client.start_notify = AsyncMock()
-    client.write_gatt_char = AsyncMock()
     client.disconnect = AsyncMock()
-    with patch("ezlock.client.establish_connection", AsyncMock(return_value=client)):
+
+    async def write(uuid, data, response=True):
+        _confirm_user_id(client, uuid)
+
+    client.write_gatt_char = AsyncMock(side_effect=write)
+    with (
+        patch("ezlock.client.establish_connection", AsyncMock(return_value=client)),
+        patch.object(client_module, "USER_ID_REPLY_TIMEOUT", 0.01),
+    ):
         yield client
 
 
@@ -49,10 +73,49 @@ USER_ID_WRITE = call(
 )
 
 
-async def test_connect_announces_user_id_without_waiting_for_a_response(bleak_client) -> None:
+async def test_connect_announces_user_id(bleak_client) -> None:
     lock = EzLockClient(DEVICE, "me@example.com")
     await lock.connect()
     assert bleak_client.write_gatt_char.await_args_list == [USER_ID_WRITE]
+
+
+async def test_user_id_is_repeated_until_confirmed(bleak_client) -> None:
+    ignored = []
+
+    async def write(uuid, data, response=True):
+        # Like the lock after a quick reconnect: the first one is ignored.
+        if uuid == NOTIFY_CHAR_UUID and not ignored:
+            ignored.append(data)
+            return
+        _confirm_user_id(bleak_client, uuid)
+
+    bleak_client.write_gatt_char.side_effect = write
+    lock = EzLockClient(DEVICE, "me@example.com")
+    await lock.connect()
+    assert bleak_client.write_gatt_char.await_args_list == [USER_ID_WRITE, USER_ID_WRITE]
+    assert lock.is_connected
+
+
+async def test_unconfirmed_user_id_still_connects(bleak_client) -> None:
+    bleak_client.write_gatt_char.side_effect = None
+    lock = EzLockClient(DEVICE, "me@example.com")
+    await lock.connect()
+    assert bleak_client.write_gatt_char.await_args_list == (
+        [USER_ID_WRITE] * client_module.USER_ID_ATTEMPTS
+    )
+    assert lock.is_connected
+
+
+async def test_unknown_user_id_is_reported(bleak_client) -> None:
+    async def write(uuid, data, response=True):
+        _confirm_user_id(bleak_client, uuid, result=client_module.USER_ID_UNKNOWN)
+
+    bleak_client.write_gatt_char.side_effect = write
+    lock = EzLockClient(DEVICE, "me@example.com")
+    with pytest.raises(EzLockUserNotRegistered):
+        await lock.connect()
+    bleak_client.disconnect.assert_awaited_once()
+    assert not lock.is_connected
 
 
 async def test_user_id_is_sent_once_per_connection(bleak_client) -> None:
@@ -109,6 +172,7 @@ def _answer(bleak_client, replies: dict) -> list:
 
     async def write(uuid, data, response=True):
         if uuid != WRITE_CHAR_UUID:
+            _confirm_user_id(bleak_client, uuid)
             return
         frame = parse_frame(bytes(data))
         requests.append(frame)

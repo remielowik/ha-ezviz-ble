@@ -8,7 +8,7 @@ import logging
 from bleak.backends.device import BLEDevice
 
 from .client import EzLockClient, EzLockError, EzLockUserNotRegistered
-from .protocol import CMD_SEND_USER_ID, NOTIFY_CHAR_UUID, LockState, send_user_id_body
+from .protocol import LockState
 
 # dbus-fast (and BlueZ) only exist on Linux.
 try:
@@ -62,7 +62,7 @@ async def async_bind(
         else:
             bonded_now = await _async_bond(client, ble_device.address, int(management_code))
         if bonded_now:
-            return await _async_state_after_bond(client, user_id)
+            return await _async_state_after_bond(client)
         try:
             return await client.query_state()
         except (EzLockError, TimeoutError) as err:
@@ -75,12 +75,10 @@ async def async_bind(
         await client.disconnect()
 
 
-async def _async_state_after_bond(client: EzLockClient, user_id: str) -> LockState | None:
+async def _async_state_after_bond(client: EzLockClient) -> LockState | None:
     await asyncio.sleep(BOND_SETTLE_SECONDS)
     # Announce the user id again, now over the encrypted link.
-    await client.write(
-        CMD_SEND_USER_ID, send_user_id_body(user_id), char_uuid=NOTIFY_CHAR_UUID
-    )
+    await client.send_user_id()
     for attempt in range(1, STATE_ATTEMPTS_AFTER_BOND + 1):
         try:
             return await client.query_state()
