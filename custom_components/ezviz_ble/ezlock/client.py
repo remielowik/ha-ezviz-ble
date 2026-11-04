@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Callable
 from datetime import datetime
 import logging
@@ -10,6 +11,7 @@ import logging
 from bleak import BleakClient
 from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.backends.device import BLEDevice
+from bleak.exc import BleakError
 from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
 
 from .protocol import (
@@ -70,6 +72,13 @@ _LOGGER = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 4.0
 CONTROL_TIMEOUT = 20.0
 CONNECT_ATTEMPTS = 2
+# BlueZ runs its own GATT exchange right after connecting. A request that
+# overlaps it can make the lock stop responding for half a minute or more.
+GATT_SETTLE_SECONDS = 2.0
+# The lock sometimes goes silent right after a reconnect; one retry after a
+# pause usually works.
+SETUP_RETRY_DELAY_SECONDS = 10.0
+_SETUP_ERRORS = (BleakError, TimeoutError, EOFError, OSError)
 # The lock confirms the user id within a fraction of a second. After a quick
 # reconnect it sometimes ignores the first one, and then answers nothing on
 # that connection until the user id is sent again.
@@ -175,22 +184,39 @@ class EzLockClient:
         async with self._connect_lock:
             if self.is_connected:
                 return
-            client = await establish_connection(
-                BleakClientWithServiceCache,
-                self._ble_device,
-                self._ble_device.name or self._ble_device.address,
-                disconnected_callback=self._on_disconnected,
-                # Every attempt costs lock battery: don't retry much.
-                max_attempts=CONNECT_ATTEMPTS,
-            )
             try:
-                await client.start_notify(NOTIFY_CHAR_UUID, self._on_notify)
-                await self._announce_user_id(client)
-            except BaseException:
-                await client.disconnect()
-                raise
+                client = await self._open()
+            except _SETUP_ERRORS as err:
+                _LOGGER.debug(
+                    "%s: connection lost during setup (%r), retrying in %g s",
+                    self.address,
+                    err,
+                    SETUP_RETRY_DELAY_SECONDS,
+                )
+                await asyncio.sleep(SETUP_RETRY_DELAY_SECONDS)
+                client = await self._open()
             self._client = client
             _LOGGER.debug("%s: connected", self.address)
+
+    async def _open(self) -> BleakClient:
+        """Connect, wait for BlueZ's GATT exchange, subscribe and announce."""
+        client = await establish_connection(
+            BleakClientWithServiceCache,
+            self._ble_device,
+            self._ble_device.name or self._ble_device.address,
+            disconnected_callback=self._on_disconnected,
+            # Every attempt costs lock battery: don't retry much.
+            max_attempts=CONNECT_ATTEMPTS,
+        )
+        try:
+            await asyncio.sleep(GATT_SETTLE_SECONDS)
+            await client.start_notify(NOTIFY_CHAR_UUID, self._on_notify)
+            await self._announce_user_id(client)
+        except BaseException:
+            with contextlib.suppress(*_SETUP_ERRORS):
+                await client.disconnect()
+            raise
+        return client
 
     async def send_user_id(self) -> None:
         """Announce the user id again on the current connection."""
