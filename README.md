@@ -48,9 +48,56 @@ integration covers those.
 * `ezviz_ble_event` events for door opened (who, which method), doorbell,
   low battery and alarms. They only arrive while Home Assistant is connected,
   which is up to 30 s after each poll or command.
+* Services to manage keypad PINs: `ezviz_ble.list_pins`, `ezviz_ble.add_pin`
+  and `ezviz_ble.delete_pin` (see below).
 
 The state is polled every 15 minutes by default (configurable). Every poll
-is a short Bluetooth connection, which costs lock battery.
+is a short Bluetooth connection, which costs lock battery. The lock's
+Bluetooth advertisement does not change with its state, so there is no way
+to follow it without connecting.
+
+## Keypad PINs
+
+Keypad PINs are managed over Bluetooth, without the EZVIZ cloud:
+
+```yaml
+# Which PINs are there? Returns user index, name and validity; never the codes.
+action: ezviz_ble.list_pins
+target:
+  entity_id: lock.q12345678
+response_variable: pins
+
+# A PIN for the cleaner: Mondays and Fridays 08:00-12:30 until the end of the year.
+action: ezviz_ble.add_pin
+target:
+  entity_id: lock.q12345678
+data:
+  pin: "246813"
+  name: Cleaner
+  valid_until: "2026-12-31 23:59:59"
+  weekdays: [mon, fri]
+  start_time: "08:00:00"
+  end_time: "12:30:00"
+response_variable: added   # added["lock.q12345678"].user_index
+
+action: ezviz_ble.delete_pin
+target:
+  entity_id: lock.q12345678
+data:
+  user_index: 4
+```
+
+* A PIN is 6 to 10 digits. The keypad also opens for a longer entry that
+  contains a stored PIN, so shorter PINs are refused.
+* Every PIN becomes its own lock user (the lock holds up to 50 PINs). To
+  change a PIN, delete it and add a new one.
+* `valid_from`/`valid_until` (local time) and a weekly schedule (weekdays plus
+  a start and end time on the same day) are optional. The lock checks them
+  against its own clock, which Home Assistant sets every 6 hours and right
+  before adding a PIN.
+* The lock gives every bonded device full access, including reading the PIN
+  codes and changing the management code. Only bond devices you trust and
+  keep the management code private.
 
 ## Requirements
 
@@ -148,8 +195,8 @@ AppArmor profile blocks D-Bus calls to BlueZ.
 * What result code 6 of lock/unlock means. It is treated as success.
 * The meaning of door-state byte 10 and the bit layout of the DoorStateChange
   push. The integration re-reads the state instead.
-* Whether the advertisement changes with the lock state, which would allow
-  instant updates without polling. Check this with `ezble watch`.
+* PIN schedules across a daylight saving change, and windows precise to the
+  minute (whole hours were tested).
 
 ## Tests
 

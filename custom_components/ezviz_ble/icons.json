@@ -1,0 +1,13 @@
+{
+  "services": {
+    "list_pins": {
+      "service": "mdi:form-textbox-password"
+    },
+    "add_pin": {
+      "service": "mdi:dialpad"
+    },
+    "delete_pin": {
+      "service": "mdi:delete"
+    }
+  }
+}

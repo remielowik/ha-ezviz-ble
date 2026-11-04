@@ -4,6 +4,7 @@ Run with pytest-homeassistant-custom-component installed:
     pytest -o asyncio_mode=auto tests/test_integration.py
 """
 
+from datetime import datetime, time
 from unittest.mock import AsyncMock, patch
 
 from bleak.backends.device import BLEDevice
@@ -14,6 +15,8 @@ from homeassistant.config_entries import SOURCE_USER
 from homeassistant.const import CONF_ADDRESS, STATE_OFF, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.ezviz_ble.const import (
@@ -23,10 +26,16 @@ from custom_components.ezviz_ble.const import (
     EVENT_LOCK,
 )
 from custom_components.ezviz_ble.ezlock.bind import InvalidManagementCode
+from custom_components.ezviz_ble.ezlock.client import EzLockPinExists
 from custom_components.ezviz_ble.ezlock.protocol import (
     PUSH_DOOR_OPEN_RECORD,
+    CMD_PIN,
     Frame,
     LockAction,
+    PinEntry,
+    PinStatus,
+    ValidityWindow,
+    WeeklyPeriod,
     parse_battery,
     parse_door_state,
     parse_parts_info,
@@ -97,6 +106,7 @@ def client_mocks():
         ),
         patch(f"{PACKAGE}.ezlock.client.EzLockClient.control", new_callable=AsyncMock) as control,
         patch(f"{PACKAGE}.ezlock.client.EzLockClient.disconnect", new_callable=AsyncMock),
+        patch(f"{PACKAGE}.ezlock.client.EzLockClient.set_time", new_callable=AsyncMock),
     ):
         query.return_value = _state()
         yield query, control
@@ -184,3 +194,65 @@ async def test_push_event(hass: HomeAssistant, entry, client_mocks) -> None:
         "user_index": 7,
         "method": "bluetooth",
     }
+
+
+async def test_pin_services(hass: HomeAssistant, entry, client_mocks) -> None:
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    client = f"{PACKAGE}.ezlock.client.EzLockClient"
+    target = {"entity_id": "lock.q12345678"}
+
+    with patch(f"{client}.list_pins", return_value=[PinEntry(4, PinStatus.ACTIVE, "Cleaner")]):
+        response = await hass.services.async_call(
+            DOMAIN, "list_pins", target, blocking=True, return_response=True
+        )
+    assert response == {
+        "lock.q12345678": {"pins": [{"user_index": 4, "name": "Cleaner", "status": "active"}]}
+    }
+
+    with (
+        patch(f"{client}.add_pin", return_value=4) as add_pin,
+        patch(f"{client}.set_time", new_callable=AsyncMock) as set_time,
+    ):
+        response = await hass.services.async_call(
+            DOMAIN,
+            "add_pin",
+            target
+            | {
+                "pin": "246813",
+                "name": "Cleaner",
+                "valid_from": "2026-11-05 08:00:00",
+                "valid_until": "2026-12-31 18:00:00",
+                "weekdays": ["mon", "fri"],
+                "start_time": "08:00:00",
+                "end_time": "12:30:00",
+            },
+            blocking=True,
+            return_response=True,
+        )
+    assert response == {"lock.q12345678": {"user_index": 4}}
+    set_time.assert_awaited_once()
+    window = ValidityWindow(
+        begin=dt_util.as_local(datetime(2026, 11, 5, 8, 0)),
+        end=dt_util.as_local(datetime(2026, 12, 31, 18, 0)),
+        periods=(WeeklyPeriod(frozenset({0, 4}), time(8, 0), time(12, 30)),),
+    )
+    add_pin.assert_awaited_once_with("246813", "Cleaner", window)
+
+    with patch(f"{client}.delete_pin", new_callable=AsyncMock) as delete_pin:
+        await hass.services.async_call(DOMAIN, "delete_pin", target | {"user_index": 4}, blocking=True)
+    delete_pin.assert_awaited_once_with(4)
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN, "add_pin", target | {"pin": "246813", "name": "x", "weekdays": ["mon"]}, blocking=True
+        )
+    with pytest.raises(HomeAssistantError) as err, patch(
+        f"{client}.add_pin", side_effect=EzLockPinExists(CMD_PIN, 3)
+    ):
+        await hass.services.async_call(
+            DOMAIN, "add_pin", target | {"pin": "246813", "name": "x"}, blocking=True
+        )
+    assert err.value.translation_key == "pin_exists"
+
+    assert await hass.config_entries.async_unload(entry.entry_id)

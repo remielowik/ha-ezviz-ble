@@ -62,6 +62,87 @@
     },
     "command_failed": {
       "message": "The lock did not execute the command: {error}"
+    },
+    "pin_exists": {
+      "message": "The lock already has this PIN."
+    },
+    "pin_not_found": {
+      "message": "The lock has no PIN for this user index."
+    },
+    "pin_storage_full": {
+      "message": "The lock cannot store more PINs."
+    },
+    "invalid_window": {
+      "message": "The PIN must become valid before it expires."
+    },
+    "invalid_schedule": {
+      "message": "A weekly schedule needs weekdays, a start time and a later end time (it cannot cross midnight)."
+    },
+    "invalid_name": {
+      "message": "The name is empty or longer than 32 bytes."
+    }
+  },
+  "selector": {
+    "weekdays": {
+      "options": {
+        "mon": "Monday",
+        "tue": "Tuesday",
+        "wed": "Wednesday",
+        "thu": "Thursday",
+        "fri": "Friday",
+        "sat": "Saturday",
+        "sun": "Sunday"
+      }
+    }
+  },
+  "services": {
+    "list_pins": {
+      "name": "List PINs",
+      "description": "Lists the keypad PINs stored on the lock: user index, name and whether the PIN is currently valid. The codes themselves are not returned."
+    },
+    "add_pin": {
+      "name": "Add PIN",
+      "description": "Stores a keypad PIN on the lock. Each PIN becomes its own lock user; the response contains its user index. Optionally limit when the PIN works.",
+      "fields": {
+        "pin": {
+          "name": "PIN",
+          "description": "6 to 10 digits. Shorter codes are refused: the keypad also opens for longer entries that contain a stored PIN."
+        },
+        "name": {
+          "name": "Name",
+          "description": "Shown in the PIN list and in door opened events (up to 32 bytes)."
+        },
+        "valid_from": {
+          "name": "Valid from",
+          "description": "The PIN works from this moment (local time)."
+        },
+        "valid_until": {
+          "name": "Valid until",
+          "description": "The PIN stops working after this moment (local time)."
+        },
+        "weekdays": {
+          "name": "Weekdays",
+          "description": "Only on these days. Requires a start and end time."
+        },
+        "start_time": {
+          "name": "Start time",
+          "description": "Daily start of the period on the selected weekdays."
+        },
+        "end_time": {
+          "name": "End time",
+          "description": "Daily end of the period (exclusive, same day)."
+        }
+      }
+    },
+    "delete_pin": {
+      "name": "Delete PIN",
+      "description": "Deletes a keypad PIN and the lock user it belongs to.",
+      "fields": {
+        "user_index": {
+          "name": "User index",
+          "description": "The PIN's user index from the PIN list."
+        }
+      }
     }
   }
 }

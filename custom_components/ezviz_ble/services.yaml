@@ -1,0 +1,63 @@
+list_pins:
+  target:
+    entity:
+      integration: ezviz_ble
+      domain: lock
+
+add_pin:
+  target:
+    entity:
+      integration: ezviz_ble
+      domain: lock
+  fields:
+    pin:
+      required: true
+      example: "246813"
+      selector:
+        text:
+          type: password
+    name:
+      required: true
+      example: "Cleaner"
+      selector:
+        text:
+    valid_from:
+      selector:
+        datetime:
+    valid_until:
+      selector:
+        datetime:
+    weekdays:
+      selector:
+        select:
+          multiple: true
+          translation_key: weekdays
+          options:
+            - mon
+            - tue
+            - wed
+            - thu
+            - fri
+            - sat
+            - sun
+    start_time:
+      selector:
+        time:
+    end_time:
+      selector:
+        time:
+
+delete_pin:
+  target:
+    entity:
+      integration: ezviz_ble
+      domain: lock
+  fields:
+    user_index:
+      required: true
+      example: 3
+      selector:
+        number:
+          min: 1
+          max: 150
+          mode: box
