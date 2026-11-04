@@ -158,9 +158,9 @@ systemctl restart bluetooth
 
 `Authenticated=4` means "debug key", `3` a regular Secure Connections key.
 After this the key survives restarts. Don't remove the lock with
-`bluetoothctl remove`: that deletes the key, and the lock refuses to pair
-again while it still remembers Home Assistant. If you ever set the lock up
-again, repeat this step.
+`bluetoothctl remove`: that deletes the key, and Home Assistant can't reach
+the lock until it is set up again. Pairing again with the management code
+works. Whenever the lock is set up again, repeat this step.
 
 Security note: because of the debug key, someone who records the pairing
 over the air can derive the link key. Pair when nobody unfamiliar is close
