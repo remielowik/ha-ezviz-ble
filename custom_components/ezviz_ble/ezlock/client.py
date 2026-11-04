@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from datetime import datetime
 import logging
 
 from bleak import BleakClient
@@ -14,30 +15,52 @@ from bleak_retry_connector import BleakClientWithServiceCache, establish_connect
 from .protocol import (
     ACKNOWLEDGED_PUSHES,
     CMD_CONTROL_LOCK,
+    CMD_PIN,
     CMD_QUERY_BATTERY,
     CMD_QUERY_DOOR_STATE,
+    CMD_QUERY_KEY,
+    CMD_QUERY_KEY_LIST,
     CMD_QUERY_PARTS_INFO,
     CMD_SEND_USER_ID,
+    CMD_SET_LOCK_TIME,
+    KEY_LIST_PAGE_SIZE,
+    KEY_TYPE_PIN,
     NOTIFY_CHAR_UUID,
     RESULT_CONTROL_DONE,
     RESULT_OK,
+    RESULT_PIN_EXISTS,
+    RESULT_PIN_NOT_FOUND,
+    RESULT_PIN_STORAGE_FULL,
     RESULT_USER_NOT_REGISTERED,
     WRITE_CHAR_UUID,
     BatteryLevels,
     Command,
     Frame,
     FrameError,
+    KeyDetail,
     LockAction,
     LockState,
     PartsInfo,
+    PinEntry,
+    PinOperation,
+    ValidityWindow,
     build_frame,
     control_lock_body,
+    key_detail_body,
+    key_list_body,
     parse_battery,
     parse_door_state,
     parse_frame,
+    parse_key_detail,
+    parse_key_list,
     parse_parts_info,
+    parse_pin_reply,
+    pin_body,
     response_command,
     send_user_id_body,
+    set_lock_time_body,
+    validate_name,
+    validate_pin,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -69,6 +92,39 @@ class EzLockResponseError(EzLockError):
 
 class EzLockUserNotRegistered(EzLockResponseError):
     """The user id is not registered on the lock."""
+
+
+class EzLockPinExists(EzLockResponseError):
+    """The lock already has this PIN."""
+
+
+class EzLockPinNotFound(EzLockResponseError):
+    """The lock has no such PIN."""
+
+
+class EzLockPinStorageFull(EzLockResponseError):
+    """The lock cannot store more PINs."""
+
+
+_PIN_ERRORS: dict[int, type[EzLockResponseError]] = {
+    RESULT_PIN_EXISTS: EzLockPinExists,
+    RESULT_PIN_NOT_FOUND: EzLockPinNotFound,
+    RESULT_PIN_STORAGE_FULL: EzLockPinStorageFull,
+}
+
+# Safety limit for paging through the key list (the lock holds 150 users).
+_MAX_KEY_LIST_PAGES = 60
+
+# Frames that carry a PIN in plaintext; keep them out of debug logs.
+_REDACTED_COMMANDS: frozenset[Command] = frozenset(
+    {CMD_PIN, response_command(CMD_QUERY_KEY)}
+)
+
+
+def _loggable(command: Command, frame: bytes | bytearray) -> str:
+    if command in _REDACTED_COMMANDS:
+        return f"{command[0]:02x}/{command[1]:02x} <{len(frame)} bytes, contains a PIN>"
+    return frame.hex()
 
 
 class EzLockClient:
@@ -161,7 +217,7 @@ class EzLockClient:
             future: asyncio.Future[Frame] = asyncio.get_running_loop().create_future()
             self._pending[key] = future
             frame = build_frame(command, body)
-            _LOGGER.debug("%s: write %s", self.address, frame.hex())
+            _LOGGER.debug("%s: write %s", self.address, _loggable(command, frame))
             try:
                 await self._client.write_gatt_char(char_uuid, frame, response=True)
                 async with asyncio.timeout(timeout):
@@ -181,7 +237,7 @@ class EzLockClient:
         await self.connect()
         assert self._client is not None
         frame = build_frame(command, body)
-        _LOGGER.debug("%s: write %s", self.address, frame.hex())
+        _LOGGER.debug("%s: write %s", self.address, _loggable(command, frame))
         await self._client.write_gatt_char(char_uuid, frame, response=True)
 
     async def query_state(self) -> LockState:
@@ -217,6 +273,65 @@ class EzLockClient:
         if frame.result not in (RESULT_OK, RESULT_CONTROL_DONE):
             raise EzLockResponseError(CMD_CONTROL_LOCK, frame.result)
 
+    async def set_time(self, local_time: datetime) -> None:
+        """Set the lock clock; PIN validity windows are checked against it.
+
+        ``local_time`` is the current time in the lock's time zone.
+        """
+        frame = await self.request(CMD_SET_LOCK_TIME, set_lock_time_body(local_time))
+        if frame.result != RESULT_OK:
+            raise EzLockResponseError(CMD_SET_LOCK_TIME, frame.result)
+
+    async def list_pins(self) -> list[PinEntry]:
+        """Return the PINs stored on the lock (without the codes)."""
+        pins: list[PinEntry] = []
+        for _ in range(_MAX_KEY_LIST_PAGES):
+            frame = await self.request(
+                CMD_QUERY_KEY_LIST, key_list_body(KEY_TYPE_PIN, len(pins))
+            )
+            if frame.result != RESULT_OK:
+                raise EzLockResponseError(CMD_QUERY_KEY_LIST, frame.result)
+            last_page, entries = parse_key_list(frame.body, KEY_TYPE_PIN)
+            pins.extend(entries)
+            if last_page or not entries:
+                return pins
+        raise EzLockError("the key list did not end")
+
+    async def read_key(self, user_index: int, key_type: int = KEY_TYPE_PIN) -> KeyDetail:
+        """Return one key, including its PIN."""
+        frame = await self.request(CMD_QUERY_KEY, key_detail_body(key_type, user_index))
+        if frame.result != RESULT_OK:
+            raise EzLockResponseError(CMD_QUERY_KEY, frame.result)
+        return parse_key_detail(frame.body)
+
+    async def add_pin(
+        self, pin: str, name: str, window: ValidityWindow | None = None
+    ) -> int:
+        """Store a PIN as a new lock user; return that user's index."""
+        validate_pin(pin)
+        validate_name(name)
+        return await self._pin_request(pin_body(PinOperation.ADD, pin, 0, name, window))
+
+    async def delete_pin(self, user_index: int) -> None:
+        """Delete a PIN and the user it belongs to.
+
+        The lock identifies the PIN to delete by its value, so read it first.
+        """
+        key = await self.read_key(user_index)
+        if key.key_type != KEY_TYPE_PIN or key.user_index != user_index or not key.pin:
+            raise EzLockPinNotFound(CMD_PIN, RESULT_PIN_NOT_FOUND)
+        await self._pin_request(
+            pin_body(PinOperation.DELETE, key.pin, user_index, key.name)
+        )
+
+    async def _pin_request(self, body: bytes) -> int:
+        frame = await self.request(CMD_PIN, body)
+        if frame.result != RESULT_OK:
+            raise _PIN_ERRORS.get(frame.result, EzLockResponseError)(
+                CMD_PIN, frame.result
+            )
+        return parse_pin_reply(frame.body)
+
     def _on_disconnected(self, client: BleakClient) -> None:
         _LOGGER.debug("%s: connection lost", self.address)
         if client is self._client:
@@ -226,12 +341,12 @@ class EzLockClient:
                 future.set_exception(EzLockError("disconnected"))
 
     def _on_notify(self, _char: BleakGATTCharacteristic, data: bytearray) -> None:
-        _LOGGER.debug("%s: notify %s", self.address, data.hex())
         try:
             frame = parse_frame(bytes(data))
         except FrameError as err:
             _LOGGER.debug("%s: ignoring notification: %s", self.address, err)
             return
+        _LOGGER.debug("%s: notify %s", self.address, _loggable(frame.command, data))
         future = self._pending.get(frame.command)
         if future is not None and not future.done():
             future.set_result(frame)

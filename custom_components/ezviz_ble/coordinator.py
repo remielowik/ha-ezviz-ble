@@ -15,8 +15,10 @@ from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .const import (
+    CLOCK_SYNC_HOURS,
     CONF_POLL_INTERVAL,
     DEFAULT_POLL_INTERVAL,
     DOMAIN,
@@ -24,7 +26,14 @@ from .const import (
     IDLE_DISCONNECT_SECONDS,
     STATE_SETTLE_SECONDS,
 )
-from .ezlock.client import EzLockClient, EzLockError, EzLockUserNotRegistered
+from .ezlock.client import (
+    EzLockClient,
+    EzLockError,
+    EzLockPinExists,
+    EzLockPinNotFound,
+    EzLockPinStorageFull,
+    EzLockUserNotRegistered,
+)
 from .ezlock.protocol import (
     PUSH_DOOR_OPEN_RECORD,
     PUSH_DOOR_STATE_CHANGE,
@@ -38,6 +47,8 @@ from .ezlock.protocol import (
     LockState,
     OpenMethod,
     PartsInfo,
+    PinEntry,
+    ValidityWindow,
     parse_door_open_record,
 )
 
@@ -84,6 +95,7 @@ class EzvizBleCoordinator(DataUpdateCoordinator[EzvizBleData]):
         self.pending_action: LockAction | None = None
         self._operation_lock = asyncio.Lock()
         self._cancel_idle_disconnect: CALLBACK_TYPE | None = None
+        self._clock_synced: datetime | None = None
 
     async def _async_update_data(self) -> EzvizBleData:
         try:
@@ -110,6 +122,7 @@ class EzvizBleCoordinator(DataUpdateCoordinator[EzvizBleData]):
 
     async def _async_read(self) -> EzvizBleData:
         state = await self.client.query_state()
+        await self._async_sync_clock()
         # Parts and battery levels are extras: don't fail the poll on them.
         if self.parts is None:
             try:
@@ -144,6 +157,66 @@ class EzvizBleCoordinator(DataUpdateCoordinator[EzvizBleData]):
             self.async_update_listeners()
         await asyncio.sleep(STATE_SETTLE_SECONDS)
         await self.async_refresh()
+
+    async def _async_sync_clock(self, *, force: bool = False) -> None:
+        """Set the lock clock to local time if it is due; never fails the caller."""
+        now = dt_util.now()
+        if (
+            not force
+            and self._clock_synced is not None
+            and now - self._clock_synced < timedelta(hours=CLOCK_SYNC_HOURS)
+        ):
+            return
+        try:
+            await self.client.set_time(now)
+        except _COMMUNICATION_ERRORS as err:
+            _LOGGER.debug("Could not set the lock clock: %s", err)
+            return
+        self._clock_synced = now
+
+    async def async_list_pins(self) -> list[PinEntry]:
+        """Return the PINs stored on the lock."""
+        return await self._async_pin_operation(self.client.list_pins)
+
+    async def async_add_pin(
+        self, pin: str, name: str, window: ValidityWindow | None
+    ) -> int:
+        """Store a PIN as a new lock user and return its user index."""
+
+        async def _add() -> int:
+            # Validity windows are checked against the lock clock.
+            await self._async_sync_clock(force=True)
+            return await self.client.add_pin(pin, name, window)
+
+        return await self._async_pin_operation(_add)
+
+    async def async_delete_pin(self, user_index: int) -> None:
+        """Delete a PIN and its lock user."""
+        await self._async_pin_operation(lambda: self.client.delete_pin(user_index))
+
+    async def _async_pin_operation[_T](
+        self, operation: Callable[[], Awaitable[_T]]
+    ) -> _T:
+        try:
+            return await self._async_run(operation)
+        except EzLockPinExists as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="pin_exists"
+            ) from err
+        except EzLockPinNotFound as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="pin_not_found"
+            ) from err
+        except EzLockPinStorageFull as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="pin_storage_full"
+            ) from err
+        except _COMMUNICATION_ERRORS as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_failed",
+                translation_placeholders={"error": str(err)},
+            ) from err
 
     async def async_shutdown(self) -> None:
         """Cancel timers and close the connection."""
