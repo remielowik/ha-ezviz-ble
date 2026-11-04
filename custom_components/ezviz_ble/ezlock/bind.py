@@ -50,8 +50,7 @@ async def async_bind(
     client = EzLockClient(ble_device, user_id)
     try:
         if bluez is None:
-            await client.connect()
-            await client.send_user_id()
+            await client.connect()  # also sends the user id
         else:
             await _async_bond(client, ble_device.address, int(management_code))
         try:
@@ -76,8 +75,9 @@ async def _async_bond(client: EzLockClient, address: str, passkey: int) -> None:
                     f"no local Bluetooth adapter has seen {address} within "
                     f"{DEVICE_WAIT_SECONDS:g} s"
                 )
+            # Connecting sends the user id, after which the lock may start
+            # pairing on its own.
             await client.connect()
-            await client.send_user_id()
 
             device = await agent.get_device(address)
             _LOGGER.debug("%s: BlueZ device state: %s", address, device)
